@@ -157,7 +157,7 @@ public class SocketGroup{
     private SocketGroup(Builder builder){
         bootstrap=new Bootstrap().channel(NioSocketChannel.class)
                 .group(eventLoopGroup)
-                .option(ChannelOption.CONNECT_TIMEOUT_MILLIS,50)
+                .option(ChannelOption.CONNECT_TIMEOUT_MILLIS,builder.connectTimeout)
                 .remoteAddress(builder.remoteAddress);
         channelEventCallback=builder.channelEventCallback;
     }
