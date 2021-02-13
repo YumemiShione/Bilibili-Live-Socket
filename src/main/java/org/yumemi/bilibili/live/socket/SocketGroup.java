@@ -54,26 +54,28 @@ public class SocketGroup{
             }
         }
         private void doReconnect(EventExecutor executor,SocketHandle handle,ChannelEventCallback callback){
+            ChannelFuture channelFuture=null;
             synchronized(handle.lock){
                 if(handle.isClosed){
                     return;
                 }
-                ChannelFuture channelFuture=doConnect(handle,callback);
-                channelFuture.addListener(new ChannelFutureListener(){
-                    @Override
-                    public void operationComplete(ChannelFuture future){
-                        if(future.isSuccess()||future.isCancelled()){
-                            return;
-                        }
-                        executor.schedule(new Runnable(){
-                            @Override
-                            public void run(){
-                                doReconnect(executor,handle,callback);
-                            }
-                        },3,TimeUnit.SECONDS);
-                    }
-                });
+                channelFuture=doConnect(handle,callback);
             }
+            channelFuture.addListener(new ChannelFutureListener(){
+                @Override
+                public void operationComplete(ChannelFuture future){
+                    if(future.isSuccess()||future.isCancelled()){
+                        return;
+                    }
+                    executor.schedule(new Runnable(){
+                        @Override
+                        public void run(){
+                            doReconnect(executor,handle,callback);
+                        }
+                    },3,TimeUnit.SECONDS);
+                }
+            });
+            callback.onReconnect(SocketGroup.this,handle);
         }
         @Override
         public void userEventTriggered(ChannelHandlerContext context,Object event){
