@@ -13,6 +13,7 @@ import io.netty.handler.codec.LengthFieldBasedFrameDecoder;
 import io.netty.handler.timeout.IdleState;
 import io.netty.handler.timeout.IdleStateEvent;
 import io.netty.handler.timeout.IdleStateHandler;
+import io.netty.util.concurrent.EventExecutor;
 import io.netty.util.concurrent.ScheduledFuture;
 import java.net.InetSocketAddress;
 import java.net.SocketAddress;
@@ -29,11 +30,49 @@ public class SocketGroup{
             this.handle=handle;
             this.callback=callback;
         }
+        protected abstract void channelInactive0(ChannelHandlerContext context);
         @Override
         public void channelInactive(ChannelHandlerContext context){
             //在SocketGroup关闭后(或者正在关闭中),尽可能的设置连接的关闭标记
             if(isClosed){
                 handle.isClosed=true;
+            }
+            try{
+                channelInactive0(context);
+            }finally{
+                if(handle.isClosed){
+                    return;
+                }
+                //链路重连
+                EventExecutor executor=context.executor();
+                executor.schedule(new Runnable(){
+                    @Override
+                    public void run(){
+                        doReconnect(executor,handle,callback);
+                    }
+                },1,TimeUnit.SECONDS);
+            }
+        }
+        private void doReconnect(EventExecutor executor,SocketHandle handle,ChannelEventCallback callback){
+            synchronized(handle.lock){
+                if(handle.isClosed){
+                    return;
+                }
+                ChannelFuture channelFuture=doConnect(handle,callback);
+                channelFuture.addListener(new ChannelFutureListener(){
+                    @Override
+                    public void operationComplete(ChannelFuture future){
+                        if(future.isSuccess()||future.isCancelled()){
+                            return;
+                        }
+                        executor.schedule(new Runnable(){
+                            @Override
+                            public void run(){
+                                doReconnect(executor,handle,callback);
+                            }
+                        },3,TimeUnit.SECONDS);
+                    }
+                });
             }
         }
         @Override
@@ -55,25 +94,27 @@ public class SocketGroup{
         }
         @Override
         public void channelActive(ChannelHandlerContext context){
+            //当网络链路连接成功时,将后续连接运作所需Handler组件都添加上
             context.pipeline().addFirst(new IdleStateHandler(40,0,0),
-                    new LengthFieldBasedFrameDecoder(Integer.MAX_VALUE,
+                    new LengthFieldBasedFrameDecoder(Short.MAX_VALUE,
                             0,
                             DataPacket.LENGTH_FIELD_LENGTH,
                             -DataPacket.LENGTH_FIELD_LENGTH,
                             0),
                     new DataPacketDecoder(),
                     new DataPacketEncoder());
+            //组件添加后,发送协议握手包
             writePacket(context,DataPacket.buildEnterRoomPacket(handle.roomId));
             callback.onConnect(SocketGroup.this,handle);
         }
         @Override
-        public void channelInactive(ChannelHandlerContext context){
-            super.channelInactive(context);
+        public void channelInactive0(ChannelHandlerContext context){
             callback.onConnectFailure(SocketGroup.this,handle);
         }
         @Override
         protected void channelRead0(ChannelHandlerContext context,DataPacket message){
             if(message.operation==DataPacket.OPERATION_HANDSHAKE_SUCCESS){
+                //协议握手成功后,用MessageHandler取代HandshakeHandler去完成之后的消息处理(逻辑分离)
                 context.pipeline().replace(this,null,new MessageHandler(handle,callback));
                 callback.onConnectSuccess(SocketGroup.this,handle);
             }else context.close();
@@ -84,8 +125,7 @@ public class SocketGroup{
             super(handle,callback);
         }
         @Override
-        public void channelInactive(final ChannelHandlerContext context){
-            super.channelInactive(context);
+        public void channelInactive0(ChannelHandlerContext context){
             callback.onDisconnected(SocketGroup.this,handle);
         }
         private ScheduledFuture<?> heartbeatTaskFuture=null;
@@ -190,6 +230,7 @@ public class SocketGroup{
         ChannelFuture future=bootstrap.handler(new ChannelInitializer<NioSocketChannel>(){
             @Override
             protected void initChannel(NioSocketChannel channel){
+                //此处仅添加握手用的Handler,其它Handler在之后连接成功后再添加
                 channel.pipeline().addLast(new HandshakeHandler(handle,callback));
             }
         }).connect();
