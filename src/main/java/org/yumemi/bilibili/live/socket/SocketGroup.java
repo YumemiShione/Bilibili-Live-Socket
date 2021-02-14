@@ -229,13 +229,7 @@ public class SocketGroup{
     }
     private ChannelFuture doConnect(final SocketHandle handle,final ChannelEventCallback callback){
         Bootstrap bootstrap=this.bootstrap.clone();
-        ChannelFuture future=bootstrap.handler(new ChannelInitializer<NioSocketChannel>(){
-            @Override
-            protected void initChannel(NioSocketChannel channel){
-                //此处仅添加握手用的Handler,其它Handler在之后连接成功后再添加
-                channel.pipeline().addLast(new HandshakeHandler(handle,callback));
-            }
-        }).connect();
+        ChannelFuture future=bootstrap.handler(new HandshakeHandler(handle,callback)).connect();
         handle.channel=future.channel();
         return future;
     }
